@@ -1,0 +1,132 @@
+# =============================================================================
+# PROYECTO FINAL - MANEJO DE DATOS (FACULTAD DE CIENCIAS)
+# SECCIÓN: PERSONA 2 - Conexión, Consultas y Procesamiento
+# =============================================================================
+
+# 1. CARGA DE LIBRERÍAS
+if (!require("pacman")) install.packages("pacman")
+library(DBI)
+library(RPostgres)
+library(dplyr)
+library(tidyverse)
+
+print(">>> Paso 1: Iniciando conexión a la nube (Neon)...")
+
+# 2. CONEXIÓN A LA BASE DE DATOS
+tryCatch({
+  con <- dbConnect(RPostgres::Postgres(), 
+                   dbname = "neondb",
+                   host = "ep-crimson-base-ad4cloa5-pooler.c-2.us-east-1.aws.neon.tech", 
+                   port = 5432, 
+                   user = "neondb_owner", 
+                   password = "npg_h68FnmNRaZgi",
+                   sslmode = "require")
+  
+  print("CONEXIÓN EXITOSA!")
+  print("Tablas detectadas:")
+  print(dbListTables(con))
+  
+}, error = function(e) {
+  print("ERROR CRÍTICO DE CONEXIÓN:")
+  print(e)
+  stop("Sin conexión no podemos continuar.")
+})
+
+# -----------------------------------------------------------------------------
+# 3. EJECUCIÓN DE CONSULTAS OBLIGATORIAS 
+# -----------------------------------------------------------------------------
+
+print(">>> Paso 2: Ejecutando consultas SQL...")
+
+# --- A) CONSULTA CON JOIN ---
+# Objetivo: Ver detalles de ventas con nombre de cliente y sucursal
+sql_join <- "
+  SELECT v.id_venta, v.fecha, v.importe, c.nombre AS cliente, s.nombre AS sucursal
+  FROM ventas v
+  JOIN clientes c ON v.id_cliente = c.id_cliente
+  JOIN sucursales s ON v.id_sucursal = s.id_sucursal
+  ORDER BY v.fecha DESC;
+"
+df_ventas_completa <- dbGetQuery(con, sql_join)
+# Procesamiento con dplyr:
+df_ventas_completa <- df_ventas_completa %>%
+  mutate(fecha = as.Date(fecha),
+         mes = format(fecha, "%Y-%m")) 
+
+print("   -> Consulta JOIN lista.")
+
+
+# --- B) CONSULTA CON GROUP BY ---
+# Objetivo: Total vendido por cada sucursal
+sql_group <- "
+  SELECT s.nombre AS sucursal, COUNT(v.id_venta) AS num_ventas, SUM(v.importe) AS total_vendido
+  FROM ventas v
+  JOIN sucursales s ON v.id_sucursal = s.id_sucursal
+  GROUP BY s.nombre
+  ORDER BY total_vendido DESC;
+"
+df_por_sucursal <- dbGetQuery(con, sql_group)
+print("   -> Consulta GROUP BY lista.")
+
+
+# --- C) CONSULTA CON CASE WHEN (Condiciones Avanzadas) ---
+# Objetivo: Clasificar tickets en Bajo, Medio y Alto
+sql_case <- "
+  SELECT id_venta, importe,
+  CASE 
+    WHEN importe < 1000 THEN 'Bajo'
+    WHEN importe BETWEEN 1000 AND 3000 THEN 'Medio'
+    ELSE 'Alto'
+  END AS tipo_ticket
+  FROM ventas;
+"
+df_tipo_ticket <- dbGetQuery(con, sql_case)
+# Procesamiento dplyr:
+resumen_tickets <- df_tipo_ticket %>% count(tipo_ticket)
+print("   -> Consulta CASE WHEN lista.")
+
+
+# --- D) CONSULTA DE AGREGACIÓN (SUM, AVG) ---
+# Objetivo: KPIs financieros
+sql_agg <- "
+  SELECT 
+    SUM(importe) as ingreso_total,
+    AVG(importe) as ticket_promedio,
+    MAX(importe) as venta_maxima
+  FROM ventas;
+"
+df_kpis <- dbGetQuery(con, sql_agg)
+print("   -> Consulta AGREGACIONES lista.")
+
+
+# --- E) CONSULTAS ADICIONALES ---
+# Top 5 Clientes
+sql_top_clients <- "
+  SELECT c.nombre, SUM(v.importe) as total_gastado
+  FROM ventas v
+  JOIN clientes c ON v.id_cliente = c.id_cliente
+  GROUP BY c.nombre
+  ORDER BY total_gastado DESC
+  LIMIT 5;
+"
+df_top_clientes <- dbGetQuery(con, sql_top_clients)
+
+# Catálogo de productos (para ver inventario)
+df_productos <- dbGetQuery(con, "SELECT * FROM productos;")
+
+print("   -> Consultas adicionales listas.")
+
+# -----------------------------------------------------------------------------
+# 4. GUARDAR RESULTADOS Y SALIDA
+# -----------------------------------------------------------------------------
+
+print(">>> Generando archivo.")
+
+save(df_ventas_completa, df_por_sucursal, df_top_clientes, df_productos, df_kpis, resumen_tickets,
+     file = "datos_ferreteria_final.RData")
+
+print("El archivo 'datos_ferreteria_final.RData' se ha creado en tu carpeta.")
+
+
+# Cerrar conexión
+dbDisconnect(con)
